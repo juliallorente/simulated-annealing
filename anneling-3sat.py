@@ -2,6 +2,7 @@ import random
 import math
 import matplotlib.pyplot as plt
 import numpy as np
+from joblib import Parallel, delayed
 
 # Função para carregar o arquivo CNF e extrair as cláusulas
 def load_cnf_file(filename):
@@ -19,10 +20,7 @@ def load_cnf_file(filename):
                 clause = list(map(int, line.split()))
                 clause.pop()  # Remove o 0 no final de cada cláusula
                 clauses.append(clause)
-    print(num_variables, clauses)
-    return num_variables, clauses
-
-
+    return num_variables, [c for c in clauses if len(c) == 3]
 
 # Função que gera uma solução inicial aleatória
 def generate_initial_solution(num_variables):
@@ -34,7 +32,9 @@ def calculate_energy(solution, clauses):
     for clause in clauses:
         satisfied = False
         for var in clause:
-            if solution[abs(var) - 1] == (var > 0):
+            var_index = abs(var) - 1  # Corrigido o índice
+            # Verifique se a variável é verdadeira ou falsa conforme a cláusula
+            if solution[var_index] == (var > 0):  # Se a variável for verdadeira
                 satisfied = True
                 break
         if not satisfied:
@@ -49,81 +49,98 @@ def get_neighbor(solution):
     return neighbor
 
 # Função de Simulated Annealing
-def simulated_annealing(clauses, num_variables, initial_temp=1000, min_temp=0.00001, cooling_rate=0.990, max_iterations=1000):
+def simulated_annealing(clauses, num_variables, initial_temp=100000, min_temp=0.00001, cooling_rate=0.990, sa_max=30):
     current_solution = generate_initial_solution(num_variables)
     current_energy = calculate_energy(current_solution, clauses)
     best_solution = current_solution
     best_energy = current_energy
     
     temperature = initial_temp
-    iteration = 0
     energy_history = []  # Para armazenar o histórico da energia durante o processo
     
     print(f"Initial energy: {current_energy}, initial temperature: {temperature}")
     
-    while temperature > min_temp and iteration < max_iterations:
-        neighbor = get_neighbor(current_solution)
-        neighbor_energy = calculate_energy(neighbor, clauses)
+    while temperature > min_temp:
+        iteration = 0
         
-        # Aceitação da mudança com base na temperatura
-        if neighbor_energy < current_energy or random.random() < math.exp((current_energy - neighbor_energy) / temperature):
-            current_solution = neighbor
-            current_energy = neighbor_energy
+        while iteration < sa_max:
+            neighbor = get_neighbor(current_solution)
+            neighbor_energy = calculate_energy(neighbor, clauses)
+            delta_energy = neighbor_energy - current_energy
             
-            # Atualizar a melhor solução encontrada
-            if current_energy < best_energy:
-                best_solution = current_solution
-                best_energy = current_energy
+            if delta_energy < 0:
+            
+                current_solution = neighbor
+                current_energy = neighbor_energy
+
+                if current_energy < best_energy:
+                    best_solution = current_solution
+                    best_energy = current_energy
+            elif random.random() < math.exp((-delta_energy) / temperature):
+                    current_solution = neighbor
+                    current_energy = neighbor_energy
+
+            iteration += 1
         
         # Resfriamento
         temperature *= cooling_rate
-        iteration += 1
         
         # Armazenar a energia a cada iteração
         energy_history.append(current_energy)
-        
-        # Exibe a temperatura e energia a cada 1000 iterações
-        if iteration % 1000 == 0:
-            print(f"Iteration {iteration}: energy = {current_energy}, temperature = {temperature}")
     
     return best_solution, best_energy, energy_history
 
-# Função principal para rodar múltiplas execuções
-def run_multiple_executions(clauses, num_variables, num_executions=1000):
+def run_single_execution(exec_num, clauses, num_variables):
+    print(f"Execution {exec_num + 1} started...")
+    solution, energy, energy_history = simulated_annealing(clauses, num_variables)
+    print(f"Execution {exec_num + 1} completed with energy: {energy}\n")
+    return solution, energy, energy_history
+
+def run_multiple_executions_parallel(clauses, num_variables, num_executions=30, n_jobs=-1):
+    # Execuções paralelas
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(run_single_execution)(i, clauses, num_variables)
+        for i in range(num_executions)
+    )
+
     best_overall_solution = None
     best_overall_energy = float('inf')
-    all_energy_histories = []  
-    
-    for exec_num in range(num_executions):
+    all_energy_histories = []
 
-        print(f"Execution {exec_num + 1} started...")
-        solution, energy, energy_history = simulated_annealing(clauses, num_variables)
+    for solution, energy, energy_history in results:
         all_energy_histories.append(energy_history)
-        
         if energy < best_overall_energy:
             best_overall_solution = solution
             best_overall_energy = energy
-        
-        print(f"Execution {exec_num + 1} completed with energy: {energy}\n")
-    
-    # Calcular a média da energia ao longo das execuções
-    max_iterations = len(all_energy_histories[0])  # Assume-se que todas as execuções têm o mesmo número de iterações
-    mean_energy_history = np.mean(all_energy_histories, axis=0)
-    
+
+    # Processamento do histórico de energia
+    sa_max = max(len(history) for history in all_energy_histories)
+    padded_histories = []
+
+    for history in all_energy_histories:
+        if len(history) < sa_max:
+            history.extend([history[-1]] * (sa_max - len(history)))
+        padded_histories.append(history)
+
+    mean_energy_history = np.mean(padded_histories, axis=0)
+
+    # Plot do gráfico de convergência
     plt.figure(figsize=(10, 6))
     plt.plot(mean_energy_history, label='Média da Energia')
-    plt.title('Gráfico de Convergência - Simulated Annealing - 250 clausulas')
+    plt.title('Gráfico de Convergência - Simulated Annealing - 250 cláusulas')
     plt.xlabel('Iterações')
     plt.ylabel('Energia (Número de cláusulas não satisfeitas)')
     plt.legend()
+    plt.grid(True)
     plt.show()
-    
+
     return best_overall_solution, best_overall_energy
 
-filename = '/Users/juliallorente/Documents/IA/atividade-3sat/uf20-01.cnf'  
+
+filename = 'uf250-01.cnf'  
 num_variables, clauses = load_cnf_file(filename)
 
-best_solution, best_energy = run_multiple_executions(clauses, num_variables)
+best_solution, best_energy = run_multiple_executions_parallel(clauses, num_variables)
 
 print(f"solução ótima encontrada: {best_solution}")
 print(f"Quantidade de cláusulas não satisfeitas: {best_energy}")
