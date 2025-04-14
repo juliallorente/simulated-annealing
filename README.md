@@ -42,5 +42,8 @@ Comparison of SA_max settings across different problem sizes
 
 
 ![Alt Text](graficos/boxplot_uf20-01.png)
+![Alt Text](graficos/boxplot_uf100-01.png)
+![Alt Text](graficos/boxplot_uf250-01.png)
+
 
 
